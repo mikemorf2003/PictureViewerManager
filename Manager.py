@@ -6,9 +6,6 @@ from typing import Optional
 
 from Configuration import Configuration
 
-# todo: read this directory from a configuration file
-TARGET_PROJECT_DIRECTORY: str = "/home/mike/PycharmProjects/PictureViewerTwo"
-
 THIRTY_MINUTES_IN_SECONDS: int = 30 * 60
 
 class Pipe:
@@ -93,7 +90,8 @@ class PictureViewerManager:
 
     def __init__(self):
 
-        self.full_path_to_picture_viewer_two_directory: Optional[str] = TARGET_PROJECT_DIRECTORY
+        self.full_path_to_picture_viewer_two_directory: Optional[str] = \
+            Configuration.get_config().get_viewer_directory()
         self.viewer_process: Optional[subprocess.Popen] = None
         self.manager_to_viewer_pipe: Optional[Pipe] = None
         self.viewer_to_manager_pipe: Optional[Pipe] = None
@@ -217,7 +215,7 @@ class UpdateManager:
     def __init__(self):
 
         self.git_executor: GitExecutor = GitExecutor()
-        self.git_executor.set_git_directory(TARGET_PROJECT_DIRECTORY)
+        self.git_executor.set_git_directory(Configuration.get_config().get_viewer_directory())
 
     def is_update_available(self) -> bool:
 

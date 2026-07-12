@@ -2,6 +2,9 @@
 [logs]
 logfile = /home/mike/PictureViewerManager.log
 
+[picture viewer]
+directory = [picture viewer two directory]
+
 [git]
 username = [your-username]
 token = [your-git-token]

@@ -33,6 +33,10 @@ class ConfigurationBase(ABC):
     def get_git_token(self) -> str:
         pass
 
+    @abstractmethod
+    def get_viewer_directory(self) -> str:
+        pass
+
 
 class Configuration(ConfigurationBase):
 
@@ -60,6 +64,7 @@ class Configuration(ConfigurationBase):
 
         self.git_username: Optional[str] = config['git']['username']
         self.git_token: Optional[str] = config['git']['token']
+        self.viewer_directory: Optional[str] = config['picture viewer']['directory']
 
     def get_git_username(self) -> str:
 
@@ -68,3 +73,7 @@ class Configuration(ConfigurationBase):
     def get_git_token(self) -> str:
 
         return self.git_token
+
+    def get_viewer_directory(self) -> str:
+
+        return self.viewer_directory
