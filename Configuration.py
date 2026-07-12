@@ -37,6 +37,10 @@ class ConfigurationBase(ABC):
     def get_viewer_directory(self) -> str:
         pass
 
+    @abstractmethod
+    def get_additional_viewer_launch_options(self) -> Optional[str]:
+        pass
+
 
 class Configuration(ConfigurationBase):
 
@@ -66,6 +70,14 @@ class Configuration(ConfigurationBase):
         self.git_token: Optional[str] = config['git']['token']
         self.viewer_directory: Optional[str] = config['picture viewer']['directory']
 
+        # this option is optional
+        self.additional_launch_options: Optional[str] = None
+        try:
+            self.additional_launch_options: Optional[str] = config['picture viewer']['additional_options']
+        except KeyError:
+            # not an error - leave value as None
+            pass
+
     def get_git_username(self) -> str:
 
         return self.git_username
@@ -77,3 +89,7 @@ class Configuration(ConfigurationBase):
     def get_viewer_directory(self) -> str:
 
         return self.viewer_directory
+
+    def get_additional_viewer_launch_options(self) -> Optional[str]:
+
+        return self.additional_launch_options

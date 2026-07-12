@@ -107,19 +107,21 @@ class PictureViewerManager:
         self.manager_to_viewer_pipe = Pipe()
         self.viewer_to_manager_pipe = Pipe()
 
+        additional_config_list: list[str] = []
+        additional_configs: Optional[str] = Configuration.get_config().get_additional_viewer_launch_options()
+        if additional_configs:
+            additional_config_list = additional_configs.split(' ')
+
         self.viewer_process = subprocess.Popen(
             args = [
                 python_in_picture_viewer_env,
                 "PictureViewerApp.py",
                 "--",
-                "--windowed", # this is for debug only
-                "--allow-mouse-input", # this is also for debug
-                "--no-workers", # also for debug
                 # pass the write file fd of the viewer-to-manager pipe to the viewer
                 f"--to-manager-pipe={self.viewer_to_manager_pipe.write_fd}",
                 # pass the read fd of the manager-to-viewer pipe to the viewer
                 f"--to-viewer-pipe={self.manager_to_viewer_pipe.read_fd}"
-            ],
+            ] + additional_config_list,
             cwd=self.full_path_to_picture_viewer_two_directory,
             pass_fds=[self.viewer_to_manager_pipe.write_fd, self.manager_to_viewer_pipe.read_fd]
         )
@@ -198,6 +200,8 @@ class GitExecutor:
 
         this_script_directory: Path = Path(__file__).parent.resolve()
         git_env["GIT_ASKPASS"] = os.path.join(this_script_directory, "AskPass.py")
+        git_env["GIT_USERNAME"] = Configuration.get_config().get_git_username()
+        git_env["GIT_PASSWORD"] = Configuration.get_config().get_git_token()
 
         res = subprocess.run(
             ["git"] + args,
