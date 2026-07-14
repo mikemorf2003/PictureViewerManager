@@ -6,7 +6,8 @@ from typing import Optional
 
 from Configuration import Configuration
 
-THIRTY_MINUTES_IN_SECONDS: int = 30 * 60
+VIEWER_EXIT_POLL_TIMEOUT_SECONDS: int = 15
+UPDATE_CHECK_IN_MULTIPLES_OF_POLL_TIMEOUT: int = 4*30
 
 class Pipe:
     """
@@ -141,12 +142,10 @@ class PictureViewerManager:
 
             self.manager_to_viewer_pipe.write_and_flush("request-stop")
 
-            status: Optional[int] = self.viewer_process.poll()
-            while status is None:
+            while self.check_if_viewer_is_running():
                 time.sleep(5)
-                status = self.viewer_process.poll()
 
-            self._is_viewer_running = False
+            self.close_pipes()
 
     def close_pipes(self):
 
@@ -160,10 +159,18 @@ class PictureViewerManager:
 
         self.viewer_to_manager_pipe = None
 
-    @property
-    def is_viewer_running(self) -> bool:
+    def check_if_viewer_is_running(self) -> bool:
 
-        return self._is_viewer_running
+        if not self._is_viewer_running:
+            return False
+
+        if self.viewer_process:
+            status_value: Optional[int] = self.viewer_process.poll()
+            return status_value is None
+
+        self._is_viewer_running = False
+        self.viewer_process = None
+        return False
 
 
 class GitExecutor:
@@ -252,18 +259,31 @@ class Cycler:
 
         self.picture_viewer_manager.launch_viewer_as_process()
 
+        update_check_count: int = 0
         while True:
 
-            if self.update_manager.is_update_available():
+            # see if viewer closed on its own for any reason
+            if not self.picture_viewer_manager.check_if_viewer_is_running():
+                break
 
-                if self.picture_viewer_manager.is_viewer_running:
-                    self.picture_viewer_manager.stop_viewer()
+            # if the update check count has surpassed its limit since the last time we checked for an update, then
+            # check again
+            update_check_count += 1
+            if update_check_count >= UPDATE_CHECK_IN_MULTIPLES_OF_POLL_TIMEOUT:
+                update_check_count = 0
+                if self.update_manager.is_update_available():
 
-                self.update_manager.perform_update()
+                    if self.picture_viewer_manager.check_if_viewer_is_running():
+                        self.picture_viewer_manager.stop_viewer()
 
-                self.picture_viewer_manager.launch_viewer_as_process()
+                    self.update_manager.perform_update()
 
-            time.sleep(THIRTY_MINUTES_IN_SECONDS)
+                    self.picture_viewer_manager.launch_viewer_as_process()
+
+            time.sleep(VIEWER_EXIT_POLL_TIMEOUT_SECONDS)
+
+        # do cleanup stuff
+        self.picture_viewer_manager.close_pipes()
 
 
 if __name__ == '__main__':
