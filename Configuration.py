@@ -41,6 +41,10 @@ class ConfigurationBase(ABC):
     def get_additional_viewer_launch_options(self) -> Optional[str]:
         pass
 
+    @abstractmethod
+    def get_number_of_cycles_per_update_check(self) -> Optional[int]:
+        pass
+
 
 class Configuration(ConfigurationBase):
 
@@ -78,6 +82,15 @@ class Configuration(ConfigurationBase):
             # not an error - leave value as None
             pass
 
+        self.number_of_cycles_per_update_check: Optional[int] = None
+        try:
+            number_of_cycles_per_update_check_str: Optional[str] = config['picture viewer']['number_of_cycles']
+            if number_of_cycles_per_update_check_str:
+                self.number_of_cycles_per_update_check = int(number_of_cycles_per_update_check_str)
+        except KeyError:
+            # not an error - leave value as None
+            pass
+
     def get_git_username(self) -> str:
 
         return self.git_username
@@ -93,3 +106,7 @@ class Configuration(ConfigurationBase):
     def get_additional_viewer_launch_options(self) -> Optional[str]:
 
         return self.additional_launch_options
+
+    def get_number_of_cycles_per_update_check(self) -> Optional[int]:
+
+        return self.number_of_cycles_per_update_check

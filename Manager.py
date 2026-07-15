@@ -7,7 +7,11 @@ from typing import Optional
 from Configuration import Configuration
 
 VIEWER_EXIT_POLL_TIMEOUT_SECONDS: int = 15
-UPDATE_CHECK_IN_MULTIPLES_OF_POLL_TIMEOUT: int = 4*30
+
+DEFAULT_NUMBER_OF_CYCLES_PER_UPDATE_CHECK: int = 4*30
+"""
+Multiply this value by the viewer exit poll timeout to get the time between update checks
+"""
 
 class Pipe:
     """
@@ -251,6 +255,12 @@ class Cycler:
         self.update_manager: UpdateManager = UpdateManager()
         self.picture_viewer_manager: PictureViewerManager = PictureViewerManager()
 
+        number_of_cycles_per_update_check: Optional[int] = \
+            Configuration.get_config().get_number_of_cycles_per_update_check()
+        if not number_of_cycles_per_update_check:
+            number_of_cycles_per_update_check = DEFAULT_NUMBER_OF_CYCLES_PER_UPDATE_CHECK
+        self.number_of_cycles_per_update_check = number_of_cycles_per_update_check
+
     def on_run(self):
         """
         Intended to be invoked exactly once during the process cycle. Sleeps and monitors action conditions and end
@@ -269,16 +279,26 @@ class Cycler:
             # if the update check count has surpassed its limit since the last time we checked for an update, then
             # check again
             update_check_count += 1
-            if update_check_count >= UPDATE_CHECK_IN_MULTIPLES_OF_POLL_TIMEOUT:
+            if update_check_count >= self.number_of_cycles_per_update_check:
+                print('checking for update...')
                 update_check_count = 0
                 if self.update_manager.is_update_available():
+
+                    print('update found, stopping viewer...')
 
                     if self.picture_viewer_manager.check_if_viewer_is_running():
                         self.picture_viewer_manager.stop_viewer()
 
+                    print('viewer stopped, performing update')
+
                     self.update_manager.perform_update()
 
+                    print('re-launching viewer')
+
                     self.picture_viewer_manager.launch_viewer_as_process()
+
+                else:
+                    print('no update detected')
 
             time.sleep(VIEWER_EXIT_POLL_TIMEOUT_SECONDS)
 
