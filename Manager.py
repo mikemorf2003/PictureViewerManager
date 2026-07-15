@@ -74,7 +74,11 @@ class Pipe:
         if self.read_closed:
             return
 
-        os.close(self._read_fd)
+        try:
+            os.close(self._read_fd)
+        except OSError:
+            pass
+
         self.read_closed = True
 
     def close_write(self):
@@ -82,7 +86,12 @@ class Pipe:
         if self.write_closed:
             return
 
-        os.close(self._write_fd)
+        # close the write fd if the os will let us - sometimes it decides randomly that it's bad
+        try:
+            os.close(self._write_fd)
+        except OSError:
+            pass
+
         self.write_closed = True
 
     def close_all(self):
