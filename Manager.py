@@ -1,10 +1,13 @@
 import os
+import select
 import subprocess
+import sys
 import time
 from pathlib import Path
 from typing import Optional
 
 from Configuration import Configuration
+from Logger import Logger
 
 VIEWER_EXIT_POLL_TIMEOUT_SECONDS: int = 15
 
@@ -26,6 +29,8 @@ class Pipe:
 
         self.read_closed: bool = False
         self.write_closed: bool = False
+
+        self._partial_read_string: str = ""
 
     @property
     def read_fd(self) -> Optional[int]:
@@ -56,6 +61,60 @@ class Pipe:
             pipe_writer.flush()
 
         return True
+
+    @staticmethod
+    def split_into_full_and_remainder_strings(string_with_newline: str) -> tuple[str, str]:
+
+        string_list: list[str] = string_with_newline.split('\n', 1)
+
+        return string_list[0], string_list[1]
+
+    def read_newline_terminated_message_non_blocking(self) -> Optional[str]:
+        """
+        A polling read method that does not block, but also does not return any partial string that does not end in
+        a newline character. Call repeatedly to check for messages.
+        """
+
+        if self.read_closed:
+            return None
+
+        if self._partial_read_string:
+
+            # it is possible that the partial string contains another full message from the previous call. if so return
+            # that message and take it off the partial string.
+            if '\n' in self._partial_read_string:
+                return_string, new_partial = self.split_into_full_and_remainder_strings(self._partial_read_string)
+                self._partial_read_string = new_partial
+                return return_string
+
+        # use select to see if there's anything to read...
+        if not select.select([self._read_fd], [], [], 0)[0]:
+            return None
+
+        # read the next part without blocking
+        chunk: bytes = os.read(self._read_fd, 1024)
+
+        # if nothing new, return nothing
+        if not chunk:
+            return None
+
+        # add the new part to any part read before to form the current partial read string
+        self._partial_read_string += chunk.decode()
+
+        # return nothing if there's no newline somewhere in the partial string
+        if not ("\n" in self._partial_read_string):
+            return None
+
+        # there is a newline. generally we'd expect only one message from the application and that message is terminated
+        # in a newline. however, it's easy to allow for more messages later, so we do so here.
+
+        return_string: str
+        remaining_string: str
+        return_string, remaining_string = self.split_into_full_and_remainder_strings(self._partial_read_string)
+
+        self._partial_read_string = remaining_string
+
+        return return_string
 
     def read_next_line_blocking(self) -> Optional[str]:
 
@@ -106,12 +165,17 @@ class PictureViewerManager:
 
         self.full_path_to_picture_viewer_two_directory: Optional[str] = \
             Configuration.get_config().get_viewer_directory()
-        self.viewer_process: Optional[subprocess.Popen] = None
+        self._viewer_process: Optional[subprocess.Popen] = None
         self.manager_to_viewer_pipe: Optional[Pipe] = None
         self.viewer_to_manager_pipe: Optional[Pipe] = None
         self._is_viewer_running: bool = False
+        self._last_shutdown_by_user_request: bool = False
 
     def launch_viewer_as_process(self) -> bool:
+
+        # do not allow multiple viewer applications to be running at the same time
+        if self.check_if_viewer_is_running():
+            return False
 
         # in order to run in the correct virtual environment we need to specify the python executable in the target
         # environments bin directory
@@ -126,7 +190,12 @@ class PictureViewerManager:
         if additional_configs:
             additional_config_list = additional_configs.split(' ')
 
-        self.viewer_process = subprocess.Popen(
+        # reset the shutdown-by-user-request flag from any value it might have had for the last process launched
+        self._last_shutdown_by_user_request = False
+
+        print(f'to-manager-pipe is: {self.viewer_to_manager_pipe.write_fd}')
+
+        self._viewer_process = subprocess.Popen(
             args = [
                 python_in_picture_viewer_env,
                 "PictureViewerApp.py",
@@ -151,7 +220,7 @@ class PictureViewerManager:
 
     def stop_viewer(self):
 
-        if self.viewer_process:
+        if self._viewer_process:
 
             self.manager_to_viewer_pipe.write_and_flush("request-stop")
 
@@ -172,17 +241,32 @@ class PictureViewerManager:
 
         self.viewer_to_manager_pipe = None
 
+    def check_last_shutdown_by_user_request(self) -> bool:
+
+        if self._last_shutdown_by_user_request:
+            return True
+
+        message: Optional[str] = self.viewer_to_manager_pipe.read_newline_terminated_message_non_blocking()
+
+        if message:
+
+            if message == "normal-shutdown-initiated":
+                self._last_shutdown_by_user_request = True
+                return True
+
+        return False
+
     def check_if_viewer_is_running(self) -> bool:
 
         if not self._is_viewer_running:
             return False
 
-        if self.viewer_process:
-            status_value: Optional[int] = self.viewer_process.poll()
+        if self._viewer_process:
+            status_value: Optional[int] = self._viewer_process.poll()
             return status_value is None
 
         self._is_viewer_running = False
-        self.viewer_process = None
+        self._viewer_process = None
         return False
 
 
@@ -272,42 +356,56 @@ class Cycler:
 
     def on_run(self):
         """
-        Intended to be invoked exactly once during the process cycle. Sleeps and monitors action conditions and end
-        conditions
+        Intended to be invoked exactly once during the process cycle.
         """
 
-        self.picture_viewer_manager.launch_viewer_as_process()
+        # self.picture_viewer_manager.launch_viewer_as_process()
 
         update_check_count: int = 0
+        first_viewer_launch: bool = True
         while True:
 
-            # see if viewer closed on its own for any reason
-            if not self.picture_viewer_manager.check_if_viewer_is_running():
-                break
-
             # if the update check count has surpassed its limit since the last time we checked for an update, then
-            # check again
-            update_check_count += 1
-            if update_check_count >= self.number_of_cycles_per_update_check:
-                print('checking for update...')
-                update_check_count = 0
+            # check again.
+            if update_check_count % 10 == 0: # we want to check the first time through especially
+
                 if self.update_manager.is_update_available():
 
                     print('update found, stopping viewer...')
 
+                    # note if the viewer was running and stop it if it is
+                    viewer_was_running: bool = False
                     if self.picture_viewer_manager.check_if_viewer_is_running():
+                        viewer_was_running = True
                         self.picture_viewer_manager.stop_viewer()
 
                     print('viewer stopped, performing update')
 
                     self.update_manager.perform_update()
 
-                    print('re-launching viewer')
+                    # re-launch the viewer here only if we stopped it above. we don't want to start it here if it
+                    # was not already running because that would hide the reason the viewer stopped from the code
+                    # below.
+                    if viewer_was_running:
+                        print('re-launching viewer')
+                        self.picture_viewer_manager.launch_viewer_as_process()
 
+            # increment the update check count
+            update_check_count += 1
+
+            # see if viewer closed on its own for any reason
+            if not self.picture_viewer_manager.check_if_viewer_is_running():
+                if first_viewer_launch:
+                    first_viewer_launch = False
                     self.picture_viewer_manager.launch_viewer_as_process()
-
                 else:
-                    print('no update detected')
+                    # if the user initiated the shutdown then break out of this loop to allow this manager to shutdown
+                    # as well
+                    if self.picture_viewer_manager.check_last_shutdown_by_user_request():
+                        Logger.log('detected shutdown by user request')
+                        break
+                    # otherwise it appears as if the viewer has crashed. try to restart it.
+                    self.picture_viewer_manager.launch_viewer_as_process()
 
             time.sleep(VIEWER_EXIT_POLL_TIMEOUT_SECONDS)
 
@@ -322,3 +420,8 @@ if __name__ == '__main__':
 
     cycler: Cycler = Cycler()
     cycler.on_run()
+
+    # it's important the manager exit normally with a 0 status so the system knows that it didn't crash and restarts
+    # it via the service
+
+    sys.exit(0)
